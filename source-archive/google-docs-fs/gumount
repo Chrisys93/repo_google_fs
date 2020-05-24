@@ -1,0 +1,5 @@
+#!/bin/sh
+
+fusermount -u $1
+rm -rf ~/.google-docs-fs
+

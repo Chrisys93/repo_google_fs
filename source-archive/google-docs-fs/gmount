@@ -1,0 +1,12 @@
+#!/bin/sh
+THIS_SCRIPT_PATH=$(readlink -f $0)
+BASE_DIR=$(dirname  $THIS_SCRIPT_PATH)
+
+if [ $# -gt 1 ]
+then
+	${BASE_DIR}/gmount.py $*
+else
+	echo "Usage: gmount mount_point username@gmail.com [flags]"
+    echo "example: gmount google joe@gmail.com -D"
+    echo "Will print debug output to stderr"
+fi
