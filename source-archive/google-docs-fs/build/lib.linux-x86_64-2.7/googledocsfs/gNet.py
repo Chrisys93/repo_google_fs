@@ -61,13 +61,15 @@ class GNet(object):
 
         return self.gd_client.Query(query.ToUri())
 
-    def get_filename(self, path, showfolders = 'false'):
+    def get_filename(self, path, showfolders = 'false', labels = None):
         """
         Purpose: Retrieves the file referred to by path from Google
         path: A String containing the path elements of the file
         showfolders: Either 'true' or 'false' - whether get_filename
                      should also retrieve folders (default: 'false')
         Returns: The gdata List Entry object containing the file or None if none exists
+
+        TODO: HERE is where label- AND hash-based lookup
         """
         name = os.path.basename(path)
         title = os.path.splitext(name)[0]
@@ -79,11 +81,13 @@ class GNet(object):
 
         feed = self.gd_client.Query(query.ToUri())
         filetype_filter = []
-     
+
         # Filter out any files that don't match the case
         for f in feed.entry:
             if f.title.text.decode(self.codec) == title:
                 filetype_filter.append(f)
+
+
         # Return the first file encountered in the folder
         # Fix this to be more precise in the final version
         # Need to implement file extensions, then I should be able to
@@ -109,7 +113,7 @@ class GNet(object):
         path: String containing path to the file to erase
         """
         if folder is True:
-            file = self.get_filename(path, showfolders = 'true')
+            file = self.get_filename(path, showfolders = 'true', labels = None)
         else:
             file = self.get_filename(path)
         self.gd_client.Delete(file.GetEditLink().href)
@@ -162,7 +166,7 @@ class GNet(object):
             parent_entry = self.get_filename(parent_dir, showfolders = 'true')
             self.gd_client.CreateFolder(path[-1], parent_entry)
 
-    def get_file(self, path, tmp_path, flags):
+    def get_file(self, path, tmp_path, flags, labels=None):
         """
         Purpose: Get the file referred to by path off Google Docs.
         path: A string containing the path to the file to download
@@ -171,7 +175,7 @@ class GNet(object):
         """
 
         filename = os.path.basename(path)
-        doc = self.get_filename(path)
+        doc = self.get_filename(path, 'true', labels)
         
         ## If doc is a new file
         if doc is None:

@@ -124,19 +124,30 @@ class GFile(fuse.Fuse):
         self.APPEND = 337932
         self.APPENDRW = 33794
 
-    def getattr(self, path):
+    def getattr(self, path, labels = None):
         """
         Purpose: Get information about a file
         path: String containing relative path to file using mountpoint as /
         Returns: a GStat object with some updated values
+
+        TODO: Main place where you could be looking for file with specific labels
         """
 
         path = unicode(path, self.codec)
         filename = os.path.basename(path)
+        dir = os.path.dirname(path)
                 
         if '/' not in self.files:
             self.files['/'] = GStat()
-            
+
+        # files = self.gn.get_docs(folder = path) # All must be in root folder
+        # if files.GetDocumentType() == 'folder':
+        #     f = [files]
+        #     for label in labels:
+        #         if label not in self.files[path].labels:
+        #             f.append[self.files[path]]
+
+
         if path in self.files:
             st = self.files[path]
         elif filename[0] == '.':
@@ -144,7 +155,11 @@ class GFile(fuse.Fuse):
         else:
             f = self.gn.get_filename(path, 'true')
             if f is None:
-                return -errno.ENOENT
+                f = []
+                feed = self.gn.get_docs(folder = filename)
+                for fi in feed.entry:
+                    if all(label in fi.labels for label in labels):
+                        f.append(fi)
             self._setattr(path = path, entry = f)
             st = self.files[path]
         
@@ -176,7 +191,7 @@ class GFile(fuse.Fuse):
                 feed = self.gn.get_docs(filetypes = excludes)
             else:
                 feed = self.gn.get_docs() # All must be in root folder
-                
+
             for file in feed.entry:
                 if file.GetDocumentType() == 'folder':
                     self.directories['/'].append('%s' % (file.title.text.decode(self.codec), ))
@@ -224,7 +239,7 @@ class GFile(fuse.Fuse):
         for r in dirents:
             yield fuse.Direntry(r.encode(self.codec))
 
-    def mknod(self, path, mode, dev):
+    def mknod(self, path, labels=None, service_type='proc', freshness_per=0.1, shelf_life=1, mode=None, dev=None):
         """
         Purpose: Create file nodes. Use mkdir to create directories
         path: Path of file to create
@@ -232,6 +247,8 @@ class GFile(fuse.Fuse):
         dev: Ignored (for now)
         Returns: 0 to indicate succes
         """
+        if labels is None:
+            labels = []
         path = unicode(path, self.codec)
         filename = os.path.basename(path)
         dir = os.path.dirname(path)
@@ -246,8 +263,8 @@ class GFile(fuse.Fuse):
             except OSError:
                 pass #Assume that it already exists
             os.mknod(tmp_path.encode(self.codec), 0644)
-        self._setattr(path = path)
-        self.files[path].set_file_attr(0)
+        self._setattr(path = path, labels = labels, service_type = service_type, freshness_per = freshness_per, shelf_life = shelf_life)
+        self.files[path].set_file_attr(0, labels, service_type, freshness_per, shelf_life)
         self.directories[dir].append(filename)
         return 0
 
@@ -488,19 +505,21 @@ class GFile(fuse.Fuse):
         self.time_accessed[path] = time.time()
         return 0
 
-    def _setattr(self, path, entry = None, file = True):
+    def _setattr(self, path, entry = None, file = True, labels=None, service_type='proc', freshness_per=0.1, shelf_life=1):
         """
         Purpose: Set the getattr information for entry
         path: String path to file
         entry: DocumentListEntry object to extract data from
         file: Boolean set to false if setting attributes of a folder
         """
-        
+
+        if labels is None:
+            labels = []
         self.files[path] = GStat()
         if entry:
             if entry.GetDocumentType() != 'folder':
-                self.files[path].set_file_attr(len(path))
-    
+                self.files[path].set_file_attr(len(path), labels, service_type, freshness_per, shelf_life)
+
             #Set times
             if entry.lastViewed is None:
                 self.files[path].set_access_times(self._time_convert(entry.updated.text.decode(self.codec)),
@@ -513,7 +532,7 @@ class GFile(fuse.Fuse):
 
         else:
             if file:
-                self.files[path].set_file_attr(len(path))
+                self.files[path].set_file_attr(len(path), labels, service_type, freshness_per, shelf_life)
                 
     def _time_convert(self, t):
         """
@@ -554,9 +573,9 @@ def main():
         passwd = getpass.getpass()
     
     #GFile expects things in the reverse order
-    sys.argv[1], sys.argv[2] = sys.argv[2], sys.argv[1]
+    # sys.argv[1], sys.argv[2] = sys.argv[2], sys.argv[1]
     
-    gfs = GFile(sys.argv[1], passwd, version = "%prog " + fuse.__version__,
+    gfs = GFile(sys.argv[0], passwd, version = "%prog " + fuse.__version__,
         usage = usage, dash_s_do='setsingle')
     gfs.parse(errex=1)
     gfs.main()
