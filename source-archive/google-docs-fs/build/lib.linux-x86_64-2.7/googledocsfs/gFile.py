@@ -44,7 +44,7 @@ class GStat(fuse.Stat):
         Purpose: Sets the attributes to folder attributes
         Returns: Nothing
         """
-        self.st_mode = stat.S_IFDIR | 0744
+        self.st_mode = stat.S_IFDIR | 0o744
         self.st_ino = 0
         self.st_dev = 0
         self.st_nlink = 2
@@ -66,7 +66,7 @@ class GStat(fuse.Stat):
         size: int the file's size in bytes
         TODO: Add labels and all other attributes used in IcarusEdge simulator
         """
-        self.st_mode = stat.S_IFREG | 0744
+        self.st_mode = stat.S_IFREG | 0o744
         self.st_nlink = 1
         self.st_size = size
         self.labels = labels
@@ -111,7 +111,7 @@ class GFile(fuse.Fuse):
         self.release_lock = threading.RLock()
         self.to_upload = {}
         self.codec = 'utf-8'
-        self.home = unicode('%s/.google-docs-fs' % (os.path.expanduser('~'),), self.codec)
+        self.home = '%s/.google-docs-fs' % (os.path.expanduser('~'),)
         if os.uname()[0] == 'Darwin':
             self.READ = 0
             self.WRITE = 1
@@ -133,7 +133,6 @@ class GFile(fuse.Fuse):
         TODO: Main place where you could be looking for file with specific labels
         """
 
-        path = unicode(path, self.codec)
         filename = os.path.basename(path)
         dir = os.path.dirname(path)
                 
@@ -173,7 +172,6 @@ class GFile(fuse.Fuse):
         Returns: Directory listing for ls
         """
         dirents = ['.', '..']
-        path = unicode(path, self.codec)
         filename = os.path.basename(path)
 
         if path == '/': # Root
@@ -239,6 +237,118 @@ class GFile(fuse.Fuse):
         for r in dirents:
             yield fuse.Direntry(r.encode(self.codec))
 
+    def readdir_labels(self, path, labels, offset):
+        """
+        Purpose: Give a listing for ls
+        path: String containing relative path to file using mountpoint as /
+        offset: Included for compatibility. Does nothing
+        Returns: Directory listing for ls
+        """
+        dirents = ['.', '..']
+        filename = os.path.basename(path)
+
+        if path == '/':  # Root
+            excludes = []
+            self.directories['/'] = []
+            feed = self.gn.get_docs(filetypes=['folder'])
+            for dir in feed.entry:
+                excludes.append('-' + dir.title.text.decode(self.codec))
+                self.directories['%s%s' % (path, dir.title.text.decode(self.codec))] = []
+            if len(excludes) > 0:
+                i = 0
+                while i < len(excludes):
+                    excludes[i] = excludes[i].encode(self.codec)
+                    i += 1
+                feed = self.gn.get_docs(filetypes=excludes)
+            else:
+                feed = self.gn.get_docs()  # All must be in root folder
+
+            for file in feed.entry:
+                if file.GetDocumentType() == 'folder':
+                    self.directories['/'].append('%s' % (file.title.text.decode(self.codec),))
+                else:
+
+                    # TODO: Find a way to do the same as above, but filter through files for matching labels
+
+                    if path in self.files:
+                        self.directories['/'].append(
+                            "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
+                    else:
+                        f = []
+                        feed = self.gn.get_docs(folder=filename)
+                        for fi in feed.entry:
+                            if all(label in fi.labels for label in labels):
+                                self.f.append("%s.%s" % (fi.title.text.decode(self.codec), self._file_extension(fi)))
+                        self.directories['/'].extend(f)
+
+        elif filename[0] == '.':  # Hidden - ignore
+            pass
+
+        else:  # Directory
+            self.directories[path] = []
+            feed = self.gn.get_docs(folder=filename)
+            for file in feed.entry:
+                if file.GetDocumentType() == 'folder':
+                    self.directories[os.path.join(path, file.title.text.decode(self.codec))] = []
+                    self.directories[path].append(file.title.text.decode(self.codec))
+                else:
+                    if path in self.files:
+                        self.directories['/'].append(
+                            "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
+                    else:
+                        f = []
+                        feed = self.gn.get_docs(folder=filename)
+                        for fi in feed.entry:
+                            if all(label in fi.labels for label in labels):
+                                self.f.append(
+                                    "%s.%s" % (fi.title.text.decode(self.codec), self._file_extension(fi)))
+                        self.directories['/'].extend(f)
+
+        for entry in self.directories[path]:
+            dirents.append(entry)
+
+        if 'My folders' in dirents:
+            dirents.remove('My folders')
+
+        # Set the appropriate attributes for use with getattr()
+        for file in feed.entry:
+            p = os.path.join(path, file.title.text.decode(self.codec))
+            if file.GetDocumentType() != 'folder':
+                p = '%s.%s' % (p, self._file_extension(file))
+            self._setattr(path=p, entry=file, labels=labels)
+
+        # Display all hidden files in dirents
+        tmp_path = '%s%s' % (self.home, path)
+        try:
+            os.makedirs(tmp_path.encode(self.codec))
+        except OSError:
+            pass
+
+        if os.path.exists(tmp_path.encode(self.codec)):
+            for file in [f for f in os.listdir(tmp_path.encode(self.codec)) if f[0] == '.']:
+                dirents.append(file)
+                self._setattr(path=os.path.join(tmp_path, file))
+
+        for r in dirents:
+            yield fuse.Direntry(r.encode(self.codec))
+
+        # TODO: ADAPT STRICTLY FOR LABEL LOOKUP, ABOVE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        # if path in self.files:
+        #     st = self.files[path]
+        # elif filename[0] == '.':
+        #     st = os.stat(('%s%s' % (self.home, path)).encode(self.codec))
+        # else:
+        #     f = self.gn.get_filename(path, 'true')
+        #     if f is None:
+        #         f = []
+        #         feed = self.gn.get_docs(folder=filename)
+        #         for fi in feed.entry:
+        #             if all(label in fi.labels for label in labels):
+        #                 f.append(fi)
+        #     self._setattr(path=path, entry=f)
+        #     st = self.files[path]
+
     def mknod(self, path, labels=None, service_type='proc', freshness_per=0.1, shelf_life=1, mode=None, dev=None):
         """
         Purpose: Create file nodes. Use mkdir to create directories
@@ -249,7 +359,6 @@ class GFile(fuse.Fuse):
         """
         if labels is None:
             labels = []
-        path = unicode(path, self.codec)
         filename = os.path.basename(path)
         dir = os.path.dirname(path)
         tmp_path = '%s%s' % (self.home, path)
@@ -259,10 +368,10 @@ class GFile(fuse.Fuse):
             self.to_upload[path] = True
         else:
             try:
-                os.makedirs(tmp_dir.encode(self.codec), 0644)
+                os.makedirs(tmp_dir.encode(self.codec), 0o644)
             except OSError:
                 pass #Assume that it already exists
-            os.mknod(tmp_path.encode(self.codec), 0644)
+            os.mknod(tmp_path.encode(self.codec), 0o644)
         self._setattr(path = path, labels = labels, service_type = service_type, freshness_per = freshness_per, shelf_life = shelf_life)
         self.files[path].set_file_attr(0, labels, service_type, freshness_per, shelf_life)
         self.directories[dir].append(filename)
@@ -275,7 +384,6 @@ class GFile(fuse.Fuse):
         flags: String giving Read/Write/Append Flags to apply to file
         Returns: Pointer to file
         """
-        path = unicode(path, self.codec)
         filename = os.path.basename(path)
         tmp_path = '%s%s' % (self.home, path)
         ## I think that's all of them. The others are just different
@@ -321,7 +429,6 @@ class GFile(fuse.Fuse):
         Returns: 0 to indicate success
         """
 
-        path = unicode(path, self.codec)
         filename = os.path.basename(path)
         tmp_path = '%s%s' % (self.home, path)
         if fh is None:
@@ -348,7 +455,6 @@ class GFile(fuse.Fuse):
         Purpose: Remove a file
         path: String containing relative path to file using mountpoint as /
         """
-        path = unicode(path, self.codec)
         filename = os.path.basename(path.encode(self.codec))
         if filename[0] == '.':
             tmp_path = u'%s%s' % (self.home, path)
@@ -364,7 +470,7 @@ class GFile(fuse.Fuse):
             return -errno.EISDIR
         try:
             self.gn.erase(path)
-        except AttributeError, e:
+        except AttributeError as e:
             return -errno.ENOENT
 
     def read(self, path, size = -1, offset = 0, fh = None):
@@ -376,7 +482,6 @@ class GFile(fuse.Fuse):
         fh: File to read
         Returns: Bytes read
         """
-        path = unicode(path, self.codec)
         filename = os.path.basename(path)
         
         if fh is None:
@@ -397,7 +502,6 @@ class GFile(fuse.Fuse):
         """
 
         self.release_lock.acquire()
-        path = unicode(path, self.codec)
         filename = os.path.basename(path)
         tmp_path = '%s%s' % (self.home, path)
 
@@ -421,7 +525,6 @@ class GFile(fuse.Fuse):
         path: String containing path to directory to create
         mode: Ignored (for now)
         """
-        path = unicode(path, self.codec)
         dir, filename = os.path.split(path)
         tmp_path = '%s%s' % (self.home, path)
         
@@ -444,7 +547,6 @@ class GFile(fuse.Fuse):
         Purpose: Remove a directory referenced by path
         path: String containing path to directory to remove
         """
-        path = unicode(path, self.codec)
         tmp_path = '%s%s' % (self.home, path)
         filename = os.path.basename(path)
         self.readdir(path, 0)
@@ -467,9 +569,7 @@ class GFile(fuse.Fuse):
         pathfrom: String path of file to move
         pathto: String new file path
         """
-        
-        pathfrom = unicode(pathfrom, self.codec)
-        pathto = unicode(pathto, self.codec)
+
         tmp_path_from = '%s%s' % (self.home, pathfrom)
         tmp_path_to = '%s%s' % (self.home, pathto)
         
@@ -494,7 +594,6 @@ class GFile(fuse.Fuse):
         return 0
 
     def truncate(self, path, length, *args, **kwargs):
-        path = unicode(path, self.codec)
         filename = os.path.basename(path)
         tmp_path = '%s%s' % (self.home, path)
         fh = open(tmp_path.encode(self.codec), 'r+')
@@ -578,6 +677,14 @@ def main():
     gfs = GFile(sys.argv[0], passwd, version = "%prog " + fuse.__version__,
         usage = usage, dash_s_do='setsingle')
     gfs.parse(errex=1)
+
+    # TODO: Get files generated and looked up, getting some time stamps for all
+
+    gfs.mknod('/file', ['traffic', 'value'], 'non-proc')
+    gfs.mknod('/file1', ['IoT', 'result'], 'non-proc')
+
+    gfs.readdir_labels('/', ['traffic', 'value'], None)
+
     gfs.main()
 
     return 0

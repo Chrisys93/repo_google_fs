@@ -180,7 +180,7 @@ class GNet(object):
         ## If doc is a new file
         if doc is None:
             import stat
-            os.mknod(tmp_path.encode(self.codec), 0700 | stat.S_IFREG)
+            os.mknod(tmp_path.encode(self.codec), 0o700 | stat.S_IFREG)
             return open(tmp_path.encode(self.codec), flags)
 
         filetype = doc.GetDocumentType()
@@ -196,7 +196,9 @@ class GNet(object):
             self.gd_client.SetClientLoginToken(docs_auth_token)
 
         else:
-            print doc.resourceId.text
+
+            print (doc.resourceId.text)
+
             self.gd_client.Export(doc.resourceId.text, tmp_path.encode(self.codec))
 
         return open(tmp_path.encode(self.codec), flags)
@@ -236,7 +238,7 @@ class GNet(object):
             ffe = self.get_filename(folderfrom, showfolders = 'true')
             feed = self.gd_client.GetDocumentListFeed(ffe.content.src)
             for entry in feed.entry:
-                if unicode(entry.title.text, self.codec) == namefrom[:-4]:
+                if entry.title.text == namefrom[:-4]:
                     entry_from = entry
             self.gd_client.MoveOutOfFolder(entry_from)
         
