@@ -111,7 +111,7 @@ class GFile(fuse.Fuse):
         self.release_lock = threading.RLock()
         self.to_upload = {}
         self.codec = 'utf-8'
-        self.home = '%s/.google-docs-fs' % (os.path.expanduser('~'),)
+        self.home = '%s' % (os.path.expanduser('~'),)
         if os.uname()[0] == 'Darwin':
             self.READ = 0
             self.WRITE = 1
@@ -293,7 +293,7 @@ class GFile(fuse.Fuse):
                     self.directories[path].append(file.title.text.decode(self.codec))
                 else:
                     if path in self.files:
-                        self.directories['/'].append(
+                        self.directories[path].append(
                             "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
                     else:
                         f = []
@@ -302,7 +302,7 @@ class GFile(fuse.Fuse):
                             if all(label in fi.labels for label in labels):
                                 self.f.append(
                                     "%s.%s" % (fi.title.text.decode(self.codec), self._file_extension(fi)))
-                        self.directories['/'].extend(f)
+                        self.directories[path].extend(f)
 
         for entry in self.directories[path]:
             dirents.append(entry)
@@ -374,7 +374,10 @@ class GFile(fuse.Fuse):
             os.mknod(tmp_path.encode(self.codec), 0o644)
         self._setattr(path = path, labels = labels, service_type = service_type, freshness_per = freshness_per, shelf_life = shelf_life)
         self.files[path].set_file_attr(0, labels, service_type, freshness_per, shelf_life)
-        self.directories[dir].append(filename)
+        if self.directories.has_key(dir):
+            self.directories[dir].append(filename)
+        else:
+            self.directories[dir] = [filename]
         return 0
 
     def open(self, path, flags):
@@ -680,8 +683,10 @@ def main():
 
     # TODO: Get files generated and looked up, getting some time stamps for all
 
-    gfs.mknod('/file', ['traffic', 'value'], 'non-proc')
-    gfs.mknod('/file1', ['IoT', 'result'], 'non-proc')
+    gfs.mknod('/file.doc', ['traffic', 'value'], 'non-proc')
+    gfs.mknod('/file1.doc', ['IoT', 'result'], 'non-proc')
+
+    gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt/file', 'hello', 0)
 
     gfs.readdir_labels('/', ['traffic', 'value'], None)
 
