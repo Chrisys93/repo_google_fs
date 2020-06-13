@@ -30,15 +30,21 @@ import time
 import fuse
 import gNet
 import getpass
+import datetime
+import random
+import string
+import statistics
 
 from subprocess import *
 
-fuse.fuse_python_api = (0,2)
+fuse.fuse_python_api = (0, 2)
+
 
 class GStat(fuse.Stat):
     """
     The stat class to use for getattr
     """
+
     def __init__(self):
         """
         Purpose: Sets the attributes to folder attributes
@@ -74,7 +80,7 @@ class GStat(fuse.Stat):
         self.freshness_per = freshness_per
         self.shelf_life = shelf_life
 
-    def set_access_times(self, mtime, ctime, atime = None):
+    def set_access_times(self, mtime, ctime, atime=None):
         """
         Purpose: Set the access times of a file
         mtime: int modified time
@@ -85,6 +91,7 @@ class GStat(fuse.Stat):
         self.st_atime = ctime
         if atime is not None and atime > 0:
             self.st_atime = atime
+
 
 class GFile(fuse.Fuse):
     """
@@ -112,6 +119,8 @@ class GFile(fuse.Fuse):
         self.to_upload = {}
         self.codec = 'utf-8'
         self.home = '%s' % (os.path.expanduser('~'),)
+        self.labeled = {}
+        self.timings = {}
         if os.uname()[0] == 'Darwin':
             self.READ = 0
             self.WRITE = 1
@@ -124,7 +133,7 @@ class GFile(fuse.Fuse):
         self.APPEND = 337932
         self.APPENDRW = 33794
 
-    def getattr(self, path, labels = None):
+    def getattr(self, path, labels=None):
         """
         Purpose: Get information about a file
         path: String containing relative path to file using mountpoint as /
@@ -135,7 +144,7 @@ class GFile(fuse.Fuse):
 
         filename = os.path.basename(path)
         dir = os.path.dirname(path)
-                
+
         if '/' not in self.files:
             self.files['/'] = GStat()
 
@@ -146,7 +155,6 @@ class GFile(fuse.Fuse):
         #         if label not in self.files[path].labels:
         #             f.append[self.files[path]]
 
-
         if path in self.files:
             st = self.files[path]
         elif filename[0] == '.':
@@ -155,89 +163,16 @@ class GFile(fuse.Fuse):
             f = self.gn.get_filename(path, 'true')
             if f is None:
                 f = []
-                feed = self.gn.get_docs(folder = filename)
+                feed = self.gn.get_docs(folder=filename)
                 for fi in feed.entry:
                     if all(label in fi.labels for label in labels):
                         f.append(fi)
-            self._setattr(path = path, entry = f)
+            self._setattr(path=path, entry=f)
             st = self.files[path]
-        
+
         return st
 
     def readdir(self, path, offset):
-        """
-        Purpose: Give a listing for ls
-        path: String containing relative path to file using mountpoint as /
-        offset: Included for compatibility. Does nothing
-        Returns: Directory listing for ls
-        """
-        dirents = ['.', '..']
-        filename = os.path.basename(path)
-
-        if path == '/': # Root
-            excludes = []
-            self.directories['/'] = []
-            feed = self.gn.get_docs(filetypes = ['folder'])
-            for dir in feed.entry:
-                excludes.append('-' + dir.title.text.decode(self.codec))
-                self.directories['%s%s' % (path, dir.title.text.decode(self.codec))] = []
-            if len(excludes) > 0:
-                i = 0
-                while i < len(excludes):
-                    excludes[i] = excludes[i].encode(self.codec)
-                    i += 1
-                feed = self.gn.get_docs(filetypes = excludes)
-            else:
-                feed = self.gn.get_docs() # All must be in root folder
-
-            for file in feed.entry:
-                if file.GetDocumentType() == 'folder':
-                    self.directories['/'].append('%s' % (file.title.text.decode(self.codec), ))
-                else:
-                    self.directories['/'].append("%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
-        
-        elif filename[0] == '.': #Hidden - ignore
-            pass
-
-        else: #Directory
-            self.directories[path] = []
-            feed = self.gn.get_docs(folder = filename)
-            for file in feed.entry:
-                if file.GetDocumentType() == 'folder':
-                    self.directories[os.path.join(path, file.title.text.decode(self.codec))] = []
-                    self.directories[path].append(file.title.text.decode(self.codec))
-                else:
-                    self.directories[path].append("%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
-        
-        for entry in self.directories[path]:
-            dirents.append(entry)
-        
-        if 'My folders' in dirents:
-            dirents.remove('My folders')
-
-        # Set the appropriate attributes for use with getattr()
-        for file in feed.entry:
-            p = os.path.join(path, file.title.text.decode(self.codec))
-            if file.GetDocumentType() != 'folder':
-                p = '%s.%s' % (p, self._file_extension(file))
-            self._setattr(path = p, entry = file)
-
-        # Display all hidden files in dirents
-        tmp_path = '%s%s' % (self.home, path)
-        try:
-            os.makedirs(tmp_path.encode(self.codec))
-        except OSError:
-            pass
-        
-        if os.path.exists(tmp_path.encode(self.codec)):
-            for file in [f for f in os.listdir(tmp_path.encode(self.codec)) if f[0] == '.']:
-                dirents.append(file)
-                self._setattr(path = os.path.join(tmp_path, file))
-
-        for r in dirents:
-            yield fuse.Direntry(r.encode(self.codec))
-
-    def readdir_labels(self, path, labels, offset):
         """
         Purpose: Give a listing for ls
         path: String containing relative path to file using mountpoint as /
@@ -267,19 +202,8 @@ class GFile(fuse.Fuse):
                 if file.GetDocumentType() == 'folder':
                     self.directories['/'].append('%s' % (file.title.text.decode(self.codec),))
                 else:
-
-                    # TODO: Find a way to do the same as above, but filter through files for matching labels
-
-                    # if path in self.files:
-                    #     self.directories['/'].append(
-                    #         "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
-                    # else:
-                        f = []
-                        feed = self.gn.get_docs(folder=filename)
-                        for fi in feed.entry:
-                            if all(label in fi.labels for label in labels):
-                                self.f.append("%s.%s" % (fi.title.text.decode(self.codec), self._file_extension(fi)))
-                        self.directories['/'].extend(f)
+                    self.directories['/'].append(
+                        "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
 
         elif filename[0] == '.':  # Hidden - ignore
             pass
@@ -292,17 +216,8 @@ class GFile(fuse.Fuse):
                     self.directories[os.path.join(path, file.title.text.decode(self.codec))] = []
                     self.directories[path].append(file.title.text.decode(self.codec))
                 else:
-                    if path in self.files:
-                        self.directories[path].append(
-                            "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
-                    else:
-                        f = []
-                        feed = self.gn.get_docs(folder=filename)
-                        for fi in feed.entry:
-                            if all(label in fi.labels for label in labels):
-                                self.f.append(
-                                    "%s.%s" % (fi.title.text.decode(self.codec), self._file_extension(fi)))
-                        self.directories[path].extend(f)
+                    self.directories[path].append(
+                        "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
 
         for entry in self.directories[path]:
             dirents.append(entry)
@@ -315,7 +230,7 @@ class GFile(fuse.Fuse):
             p = os.path.join(path, file.title.text.decode(self.codec))
             if file.GetDocumentType() != 'folder':
                 p = '%s.%s' % (p, self._file_extension(file))
-            self._setattr(path=p, entry=file, labels=labels)
+            self._setattr(path=p, entry=file)
 
         # Display all hidden files in dirents
         tmp_path = '%s%s' % (self.home, path)
@@ -331,6 +246,108 @@ class GFile(fuse.Fuse):
 
         for r in dirents:
             yield fuse.Direntry(r.encode(self.codec))
+
+    def readdir_labels(self, path, labels, offset):
+        """
+        Purpose: Give a listing for ls
+        path: String containing relative path to file using mountpoint as /
+        offset: Included for compatibility. Does nothing
+        Returns: Directory listing for ls
+        """
+        self.labeled = {}
+        dirents = ['.', '..']
+        filename = os.path.basename(path)
+
+        if path == '/':  # Root
+            excludes = []
+            self.directories['/'] = []
+            self.labeled['/'] = {}
+            # for dir in feed.entry:
+            #     excludes.append('-' + dir.title.text.decode(self.codec))
+            #     self.directories['%s%s' % (path, dir.title.text.decode(self.codec))] = []
+            # if len(excludes) > 0:
+            #     i = 0
+            #     while i < len(excludes):
+            #         excludes[i] = excludes[i].encode(self.codec)
+            #         i += 1
+            #     feed = self.gn.get_docs(filetypes=excludes)
+            # else:
+            #     feed = self.gn.get_docs()  # All must be in root folder
+
+            # for file in feed.entry:
+            #     if file.GetDocumentType() == 'folder':
+            #         self.directories['/'].append('%s' % (file.title.text.decode(self.codec),))
+            #     else:
+            #
+            #         # TODO: Find a way to do the same as above, but filter through files for matching labels
+            #
+            #         # if path in self.files:
+            #         #     self.directories['/'].append(
+            #         #         "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
+            #         # else:
+            #         feed = self.gn.get_docs(folder=filename)
+            for fi in self.files:
+                f = self.files[fi]
+                if all(label in f.labels for label in labels):
+                    self.labeled[path][fi] = f
+
+        elif filename[0] == '.':  # Hidden - ignore
+            pass
+
+        else:  # Directory
+            self.directories[path] = []
+            self.labeled[path] = {}
+            # for file in feed.entry:
+            #     if file.GetDocumentType() == 'folder':
+            #         self.directories[os.path.join(path, file.title.text.decode(self.codec))] = []
+            #         self.directories[path].append(file.title.text.decode(self.codec))
+            #     else:
+            #         # if path in self.files:
+            #         #     self.directories[path].append(
+            #         #         "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
+            #         # else:
+            #         feed = self.gn.get_docs(folder=filename)
+            for fi in self.files:
+                f = self.files[fi]
+                if all(label in labels for label in f.labels):
+                    self.labeled[path][fi] = f
+        return self.labeled
+
+        # for entry in self.directories[path]:
+        #     dirents.append(entry)
+        #
+        # if 'My folders' in dirents:
+        #     dirents.remove('My folders')
+
+        # Set the appropriate attributes for use with getattr()
+        # for file in feed.entry:
+        #     p = os.path.join(path, file.title.text.decode(self.codec))
+        #     if file.GetDocumentType() != 'folder':
+        #         p = '%s.%s' % (p, self._file_extension(file))
+        #     self._setattr(path=p, entry=file, labels=labels)
+
+        # f = []
+        # feed = self.gn.get_docs(folder=filename)
+        # for fi in feed.entry:
+        #     if all(label in fi.labels for label in labels):
+        #         self.f.append(
+        #             "%s.%s" % (fi.title.text.decode(self.codec), self._file_extension(fi)))
+        # self.directories[path].extend(f)
+        #
+        # # Display all hidden files in dirents
+        # tmp_path = '%s%s' % (self.home, path)
+        # try:
+        #     os.makedirs(tmp_path.encode(self.codec))
+        # except OSError:
+        #     pass
+        #
+        # if os.path.exists(tmp_path.encode(self.codec)):
+        #     for file in [f for f in os.listdir(tmp_path.encode(self.codec)) if f[0] == '.']:
+        #         dirents.append(file)
+        #         self._setattr(path=os.path.join(tmp_path, file))
+        #
+        # for r in dirents:
+        #     yield fuse.Direntry(r.encode(self.codec))
 
         # TODO: ADAPT STRICTLY FOR LABEL LOOKUP, ABOVE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -349,6 +366,127 @@ class GFile(fuse.Fuse):
         #     self._setattr(path=path, entry=f)
         #     st = self.files[path]
 
+
+    def readdir_times(self, path, max_time, min_time, offset):
+        """
+        Purpose: Give a listing for ls
+        path: String containing relative path to file using mountpoint as /
+        offset: Included for compatibility. Does nothing
+        Returns: Directory listing for ls
+        """
+        self.timings = {}
+        dirents = ['.', '..']
+        filename = os.path.basename(path)
+
+        if path == '/':  # Root
+            excludes = []
+            self.directories['/'] = []
+            self.timings['/'] = {}
+            # for dir in feed.entry:
+            #     excludes.append('-' + dir.title.text.decode(self.codec))
+            #     self.directories['%s%s' % (path, dir.title.text.decode(self.codec))] = []
+            # if len(excludes) > 0:
+            #     i = 0
+            #     while i < len(excludes):
+            #         excludes[i] = excludes[i].encode(self.codec)
+            #         i += 1
+            #     feed = self.gn.get_docs(filetypes=excludes)
+            # else:
+            #     feed = self.gn.get_docs()  # All must be in root folder
+
+            # for file in feed.entry:
+            #     if file.GetDocumentType() == 'folder':
+            #         self.directories['/'].append('%s' % (file.title.text.decode(self.codec),))
+            #     else:
+            #
+            #         # TODO: Find a way to do the same as above, but filter through files for matching labels
+            #
+            #         # if path in self.files:
+            #         #     self.directories['/'].append(
+            #         #         "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
+            #         # else:
+            #         feed = self.gn.get_docs(folder=filename)
+            for fi in self.files:
+                f = self.files[fi]
+                if min_time <= f.ctime <= max_time:
+                    self.timings[path][fi] = f
+
+        elif filename[0] == '.':  # Hidden - ignore
+            pass
+
+        else:  # Directory
+            self.directories[path] = []
+            self.timings[path] = {}
+            # for file in feed.entry:
+            #     if file.GetDocumentType() == 'folder':
+            #         self.directories[os.path.join(path, file.title.text.decode(self.codec))] = []
+            #         self.directories[path].append(file.title.text.decode(self.codec))
+            #     else:
+            #         # if path in self.files:
+            #         #     self.directories[path].append(
+            #         #         "%s.%s" % (file.title.text.decode(self.codec), self._file_extension(file)))
+            #         # else:
+            #         feed = self.gn.get_docs(folder=filename)
+            for fi in self.files:
+                f = self.files[fi]
+                if min_time <= f.ctime <= max_time:
+                    self.timings[path][fi] = f
+        return self.timings
+
+        # for entry in self.directories[path]:
+        #     dirents.append(entry)
+        #
+        # if 'My folders' in dirents:
+        #     dirents.remove('My folders')
+
+        # Set the appropriate attributes for use with getattr()
+        # for file in feed.entry:
+        #     p = os.path.join(path, file.title.text.decode(self.codec))
+        #     if file.GetDocumentType() != 'folder':
+        #         p = '%s.%s' % (p, self._file_extension(file))
+        #     self._setattr(path=p, entry=file, labels=labels)
+
+        # f = []
+        # feed = self.gn.get_docs(folder=filename)
+        # for fi in feed.entry:
+        #     if all(label in fi.labels for label in labels):
+        #         self.f.append(
+        #             "%s.%s" % (fi.title.text.decode(self.codec), self._file_extension(fi)))
+        # self.directories[path].extend(f)
+        #
+        # # Display all hidden files in dirents
+        # tmp_path = '%s%s' % (self.home, path)
+        # try:
+        #     os.makedirs(tmp_path.encode(self.codec))
+        # except OSError:
+        #     pass
+        #
+        # if os.path.exists(tmp_path.encode(self.codec)):
+        #     for file in [f for f in os.listdir(tmp_path.encode(self.codec)) if f[0] == '.']:
+        #         dirents.append(file)
+        #         self._setattr(path=os.path.join(tmp_path, file))
+        #
+        # for r in dirents:
+        #     yield fuse.Direntry(r.encode(self.codec))
+
+        # TODO: ADAPT STRICTLY FOR LABEL LOOKUP, ABOVE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        # if path in self.files:
+        #     st = self.files[path]
+        # elif filename[0] == '.':
+        #     st = os.stat(('%s%s' % (self.home, path)).encode(self.codec))
+        # else:
+        #     f = self.gn.get_filename(path, 'true')
+        #     if f is None:
+        #         f = []
+        #         feed = self.gn.get_docs(folder=filename)
+        #         for fi in feed.entry:
+        #             if all(label in fi.labels for label in labels):
+        #                 f.append(fi)
+        #     self._setattr(path=path, entry=f)
+        #     st = self.files[path]
+
+
     def mknod(self, path, labels=None, service_type='proc', freshness_per=0.1, shelf_life=1, mode=None, dev=None):
         """
         Purpose: Create file nodes. Use mkdir to create directories
@@ -363,16 +501,17 @@ class GFile(fuse.Fuse):
         dir = os.path.dirname(path)
         tmp_path = '%s%s' % (self.home, path)
         tmp_dir = '%s%s' % (self.home, dir)
-        
+
         if filename[0] != '.':
             self.to_upload[path] = True
         else:
             try:
                 os.makedirs(tmp_dir.encode(self.codec), 0o644)
             except OSError:
-                pass #Assume that it already exists
+                pass  # Assume that it already exists
             os.mknod(tmp_path.encode(self.codec), 0o644)
-        self._setattr(path = path, labels = labels, service_type = service_type, freshness_per = freshness_per, shelf_life = shelf_life)
+        self._setattr(path=path, labels=labels, service_type=service_type, freshness_per=freshness_per,
+                      shelf_life=shelf_life)
         self.files[path].set_file_attr(0, labels, service_type, freshness_per, shelf_life)
         if self.directories.has_key(dir):
             self.directories[dir].append(filename)
@@ -403,26 +542,26 @@ class GFile(fuse.Fuse):
             f = 'a'
         elif flags == self.APPENDRW:
             f = 'a+'
-        elif type(flags) is str: # Assume that it was passed from self.read()
+        elif type(flags) is str:  # Assume that it was passed from self.read()
             f = flags
         else:
-            f = 'a+' # Just do something to make it work ;-)
+            f = 'a+'  # Just do something to make it work ;-)
         if not os.path.exists(tmp_path):
             try:
                 os.makedirs(os.path.dirname(tmp_path))
             except OSError:
-                pass #Assume path exists
+                pass  # Assume path exists
             if filename[0] != '.':
                 file = self.gn.get_file(path, tmp_path, f)
             else:
                 file = open(tmp_path.encode(self.codec), f)
         else:
             file = open(tmp_path.encode(self.codec), f)
-                            
+
         self.files[path].st_size = os.path.getsize(tmp_path.encode(self.codec))
         return file
 
-    def write(self, path, buf, offset, fh = None):
+    def write(self, path, buf, offset, fh=None):
         """
         Purpose: Write the file to Google Docs
         path: Path of the file to write as String
@@ -444,7 +583,7 @@ class GFile(fuse.Fuse):
         self.time_accessed[path] = time.time()
         return len(buf)
 
-    def flush(self, path, fh = None):
+    def flush(self, path, fh=None):
         """
         Purpose: Flush the write data and upload it to Google Docs
         path: String containing path to file to flush
@@ -464,7 +603,7 @@ class GFile(fuse.Fuse):
             if os.path.exists(tmp_path.encode(self.codec)):
                 if os.path.isdir(tmp_path.encode(self.codec)):
                     return -errno.EISDIR
-                    
+
                 os.remove(tmp_path.encode(self.codec))
                 return 0
             else:
@@ -476,7 +615,7 @@ class GFile(fuse.Fuse):
         except AttributeError as e:
             return -errno.ENOENT
 
-    def read(self, path, size = -1, offset = 0, fh = None):
+    def read(self, path, size=-1, offset=0, fh=None):
         """
         Purpose: Read from file pointed to by fh
         path: String Path to file if fh is None
@@ -486,17 +625,17 @@ class GFile(fuse.Fuse):
         Returns: Bytes read
         """
         filename = os.path.basename(path)
-        
+
         if fh is None:
             fh = self.open(path.encode(self.codec), 'rb+')
-            
+
         fh.seek(offset)
         buf = fh.read(size)
         tmp_path = '%s%s' % (self.home, path)
         self.time_accessed[tmp_path] = time.time()
         return buf
 
-    def release(self, path, flags, fh = None):
+    def release(self, path, flags, fh=None):
         """
         Purpose: Called after a file is closed
         path: String containing path to file to be released
@@ -511,12 +650,12 @@ class GFile(fuse.Fuse):
         if path in self.to_upload and path in self.written:
             self.gn.upload_file(tmp_path)
             del self.to_upload[path]
-        
+
         elif os.path.exists(tmp_path):
             if path in self.written:
                 self.gn.update_file_contents(path, tmp_path)
                 del self.written[path]
-            
+
         for t in self.time_accessed:
             if time.time() - self.time_accessed[t] > 300:
                 os.remove(t.encode(self.codec))
@@ -530,19 +669,19 @@ class GFile(fuse.Fuse):
         """
         dir, filename = os.path.split(path)
         tmp_path = '%s%s' % (self.home, path)
-        
+
         if path in self.directories:
             return -errno.EEXIST
         if dir in self.directories:
             self.directories[os.path.dirname(path)].append(filename)
         else:
             return -errno.ENOENT
-        
+
         self.gn.make_folder(path)
         self.directories[path] = []
-        self._setattr(path, file = False)
+        self._setattr(path, file=False)
         os.makedirs(tmp_path.encode(self.codec))
-        
+
         return 0
 
     def rmdir(self, path):
@@ -554,8 +693,8 @@ class GFile(fuse.Fuse):
         filename = os.path.basename(path)
         self.readdir(path, 0)
         if path in self.directories:
-            if len(self.directories[path]) == 0: #Empty
-                self.gn.erase(path, folder = True)
+            if len(self.directories[path]) == 0:  # Empty
+                self.gn.erase(path, folder=True)
                 self.directories[os.path.dirname(path)].remove(filename)
                 del self.files[path]
                 del self.directories[path]
@@ -575,12 +714,12 @@ class GFile(fuse.Fuse):
 
         tmp_path_from = '%s%s' % (self.home, pathfrom)
         tmp_path_to = '%s%s' % (self.home, pathto)
-        
+
         if pathfrom == pathto:
             return -errno.EEXIST
         elif os.path.dirname(pathfrom) == os.path.dirname(pathto):
             return -errno.ESAMEDIR
-        else: ## Move the file
+        else:  ## Move the file
             if os.path.exists(tmp_path_from.encode(self.codec)):
                 os.rename(tmp_path_from, tmp_path_to)
             if pathfrom in self.directories:
@@ -591,9 +730,9 @@ class GFile(fuse.Fuse):
             if os.path.basename(pathfrom) in self.directories[os.path.dirname(pathfrom)]:
                 self.directories[os.path.dirname(pathfrom)].remove(os.path.basename(pathfrom))
             self.directories[os.path.dirname(pathto)].append(os.path.basename(pathto))
-            
+
             self.gn.move_file(pathfrom, pathto)
-            
+
         return 0
 
     def truncate(self, path, length, *args, **kwargs):
@@ -607,7 +746,7 @@ class GFile(fuse.Fuse):
         self.time_accessed[path] = time.time()
         return 0
 
-    def _setattr(self, path, entry = None, file = True, labels=None, service_type='proc', freshness_per=0.1, shelf_life=1):
+    def _setattr(self, path, entry=None, file=True, labels=None, service_type='proc', freshness_per=0.1, shelf_life=1):
         """
         Purpose: Set the getattr information for entry
         path: String path to file
@@ -622,27 +761,27 @@ class GFile(fuse.Fuse):
             if entry.GetDocumentType() != 'folder':
                 self.files[path].set_file_attr(len(path), labels, service_type, freshness_per, shelf_life)
 
-            #Set times
+            # Set times
             if entry.lastViewed is None:
                 self.files[path].set_access_times(self._time_convert(entry.updated.text.decode(self.codec)),
-                                            self._time_convert(entry.published.text.decode(self.codec)))
+                                                  self._time_convert(entry.published.text.decode(self.codec)))
 
             else:
                 self.files[path].set_access_times(self._time_convert(entry.updated.text.decode(self.codec)),
-                                            self._time_convert(entry.published.text.decode(self.codec)),
-                                            self._time_convert(entry.lastViewed.text.decode(self.codec)))
+                                                  self._time_convert(entry.published.text.decode(self.codec)),
+                                                  self._time_convert(entry.lastViewed.text.decode(self.codec)))
 
         else:
             if file:
                 self.files[path].set_file_attr(len(path), labels, service_type, freshness_per, shelf_life)
-                
+
     def _time_convert(self, t):
         """
         Purpose: Converts the GData String time to UNIX Time
         t: String representation of GData's time format
         Returns: Integer conversion of t in UNIX Time
         """
-        return int(time.mktime(tuple([int(x) for x in (t[:10].split('-')) + t[11:19].split(':')]) + (0,0,0)))
+        return int(time.mktime(tuple([int(x) for x in (t[:10].split('-')) + t[11:19].split(':')]) + (0, 0, 0)))
 
     def _file_extension(self, entry):
         """
@@ -658,8 +797,9 @@ class GFile(fuse.Fuse):
         elif entry.GetDocumentType() == 'presentation':
             return 'ppt'
 
-        #Should never reach this - used for debugging
+        # Should never reach this - used for debugging
         return entry.GetDocumentType()
+
 
 def main():
     """
@@ -673,12 +813,12 @@ def main():
     passwd = None
     while not passwd:
         passwd = getpass.getpass()
-    
-    #GFile expects things in the reverse order
-    #sys.argv[1], sys.argv[2] = sys.argv[2], sys.argv[1]
-    
-    gfs = GFile(sys.argv[0], passwd, version = "%prog " + fuse.__version__,
-        usage = usage, dash_s_do='setsingle')
+
+    # GFile expects things in the reverse order
+    # sys.argv[1], sys.argv[2] = sys.argv[2], sys.argv[1]
+
+    gfs = GFile(sys.argv[0], passwd, version="%prog " + fuse.__version__,
+                usage=usage, dash_s_do='setsingle')
     gfs.parse(errex=1)
 
     # TODO: Get files generated and looked up, getting some time stamps for all
@@ -689,19 +829,348 @@ def main():
     # gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/file', 'hello', 0)
     #
     # gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/file1', 'hello there', 0)
+    #
+    # result = gfs.readdir_labels('/', ['traffic', 'value'], None)
+    #
+    # print result
 
-    result = gfs.readdir_labels('/', ['traffic', 'value'], None)
+    # gfs.main()
 
-    gfs.main()
+    # Generating labels
+    labels = []
+    for i in range(0, 10):
+        label = ''.join(random.SystemRandom().choice(string.ascii_letters) for _ in range(4))
+        labels.append(label)
 
-    gfs.mknod('/file.doc', ['traffic', 'value'], 'non-proc')
-    gfs.mknod('/file1.doc', ['IoT', 'result'], 'non-proc')
+    # Generating image-based files
+    # TODO: Write bytecode images in doc files:
+    os.chdir("/home/chrisys/Repos_google_fs/images")
+    i = 0
+    gfs.mknod('/log10.doc')
+    gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/log10.doc', 'log start:\n', 0)
+    log = open('%s' % (os.path.expanduser('~'),) + '/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/log10.doc', "a")
+    for filename in os.listdir(os.getcwd()):
+        with open(filename, "rb") as image:
+            f = image.read()
+            b = bytearray(f)
+        l = []
+        for j in range(0, 4):
+            l.append(random.SystemRandom().choice(labels))
 
-    gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/file', 'hello', 0)
+        i += 1
+        if i % 5000 == 0:
+            wres_time = []
+            for iter in range(0, 5):
+                l = []
+                for j in range(0, 4):
+                    l.append(random.SystemRandom().choice(labels))
+                gfs.mknod('/' + filename, l)
+                write_time = datetime.datetime.now()
+                gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/'+filename, b, 0)
+                wrote_time = datetime.datetime.now()
+                wres_time.append((wrote_time - write_time).microseconds)
+                written_delay = statistics.mean(wres_time)
+                log.write( str(written_delay) + ' microseconds writing time - the file was written at: '+ str(wrote_time) + '\n')
+            i += 5
 
-    gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/file1', 'hello there', 0)
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', random.SystemRandom().choice(labels), None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+            l = []
+            for i in range(0, 1):
+                l.append(random.SystemRandom().choice(labels))
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', l, None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+            l = []
+            for i in range(0, 2):
+                l.append(random.SystemRandom().choice(labels))
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', l, None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+
+            l = []
+            for i in range(0, 3):
+                l.append(random.SystemRandom().choice(labels))
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', l, None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+        else:
+            gfs.mknod('/' + filename, l)
+            gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/'+filename, b, 0)
+
+    log.close()
+
+
+
+    # Generating labels
+    labels = []
+    for i in range(0, 100):
+        label = ''.join(random.SystemRandom().choice(string.ascii_letters) for _ in range(4))
+        labels.append(label)
+
+    # Generating image-based files
+    # TODO: Write bytecode images in doc files:
+    os.chdir("/home/chrisys/Repos_google_fs/images")
+    i = 0
+    gfs.mknod('/log100.doc')
+    gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/log100.doc', 'log start:\n', 0)
+    log = open('%s' % (os.path.expanduser('~'),) + '/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/log100.doc', "a")
+    for filename in os.listdir(os.getcwd()):
+        with open(filename, "rb") as image:
+            f = image.read()
+            b = bytearray(f)
+        l = []
+        for j in range(0, 4):
+            l.append(random.SystemRandom().choice(labels))
+
+        i += 1
+        if i % 5000 == 0:
+            wres_time = []
+            for iter in range(0, 5):
+                l = []
+                for j in range(0, 3):
+                    l.append(random.SystemRandom().choice(labels))
+                gfs.mknod('/' + filename, l)
+                write_time = datetime.datetime.now()
+                gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/'+filename, b, 0)
+                wrote_time = datetime.datetime.now()
+                wres_time.append((wrote_time - write_time).microseconds)
+                written_delay = statistics.mean(wres_time)
+                log.write( str(written_delay) + ' microseconds writing time - the file was written at: '+ str(wrote_time) + '\n')
+            i += 5
+
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', random.SystemRandom().choice(labels), None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+            l = []
+            for i in range(0, 1):
+                l.append(random.SystemRandom().choice(labels))
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', l, None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+            l = []
+            for i in range(0, 2):
+                l.append(random.SystemRandom().choice(labels))
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', l, None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+
+            l = []
+            for i in range(0, 3):
+                l.append(random.SystemRandom().choice(labels))
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', l, None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+        else:
+            gfs.mknod('/' + filename, l)
+            gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/'+filename, b, 0)
+
+    log.close()
+
+
+
+    # Generating labels
+    labels = []
+    for i in range(0, 1000):
+        label = ''.join(random.SystemRandom().choice(string.ascii_letters) for _ in range(4))
+        labels.append(label)
+
+    # Generating image-based files
+    # TODO: Write bytecode images in doc files:
+    os.chdir("/home/chrisys/Repos_google_fs/images")
+    i = 0
+    gfs.mknod('/log1000.doc')
+    gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/log1000.doc', 'log start:\n', 0)
+    log = open('%s' % (os.path.expanduser('~'),) + '/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/log1000.doc', "a")
+    for filename in os.listdir(os.getcwd()):
+        with open(filename, "rb") as image:
+            f = image.read()
+            b = bytearray(f)
+        l = []
+        for j in range(0, 4):
+            l.append(random.SystemRandom().choice(labels))
+
+        i += 1
+        if i % 5000 == 0:
+            wres_time = []
+            for iter in range(0, 5):
+                l = []
+                for j in range(0, 3):
+                    l.append(random.SystemRandom().choice(labels))
+                gfs.mknod('/' + filename, l)
+                write_time = datetime.datetime.now()
+                gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/'+filename, b, 0)
+                wrote_time = datetime.datetime.now()
+                wres_time.append((wrote_time - write_time).microseconds)
+                written_delay = statistics.mean(wres_time)
+                log.write( str(written_delay) + ' microseconds writing time - the file was written at: '+ str(wrote_time) + '\n')
+            i += 5
+
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', random.SystemRandom().choice(labels), None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+            l = []
+            for i in range(0, 1):
+                l.append(random.SystemRandom().choice(labels))
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', l, None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+            l = []
+            for i in range(0, 2):
+                l.append(random.SystemRandom().choice(labels))
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', l, None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+
+            l = []
+            for i in range(0, 3):
+                l.append(random.SystemRandom().choice(labels))
+            lookup_time = datetime.datetime.now()
+            result = gfs.readdir_labels('/', l, None)
+            res_time = datetime.datetime.now()
+            for la in result:
+                n = 0
+                for j in result[la]:
+                    n += 1
+                log.write( la + " has " + str(n) + " matching labelled files.")
+
+            lookup_delay = res_time - lookup_time
+            log.write( 'Lookup delay: ' + str(lookup_delay.seconds) + ':' + str(lookup_delay.microseconds) + '\n')
+
+        else:
+            gfs.mknod('/' + filename, l)
+            gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/'+filename, b, 0)
+
+    log.close()
+
+    # TODO: Check each 5000 file writes, for write and lookup speed, and at the end, for each label lookup speed.
+
+    # gfs.mknod('/file.doc', ['traffic', 'value'], 'non-proc')
+    # gfs.mknod('/file1.doc', ['IoT', 'result'], 'non-proc')
+    # gfs.mknod('/file2.doc', ['traffic', 'value', 'photo'], 'non-proc')
+    #
+    # gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/file', 'hello', 0)
+    #
+    # gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/file1', 'hello there', 0)
+    #
+    # gfs.write('/Repos_google_fs/source-archive/google-docs-fs/googledocsfs/mntpnt1/file2', 'hello there', 0)
+    #
+    #
+    #
+    # lookup_time = datetime.datetime.now()
+    # result = gfs.readdir_labels('/', ['traffic', 'value'], None)
+    # res_time = datetime.datetime.now()
+    # for i in result:
+    #     n = 0
+    #     for j in result[i]:
+    #         n += 1
+    #     print i, " has " + str(n) + " matching labelled files."
+    #
+    # lookup_delay = res_time - lookup_time
+    # print(lookup_delay.seconds, ":", lookup_delay.microseconds)
 
     return 0
+
 
 if __name__ == '__main__':
     main()
